@@ -1,7 +1,7 @@
 import datetime
 import pathlib
 
-import gym
+import gymnasium as gym
 import numpy
 import torch
 

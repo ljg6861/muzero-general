@@ -91,3 +91,31 @@ venv.bak/
 .mypy_cache/
 .dmypy.json
 dmypy.json
+
+# PyTorch model checkpoints and training artifacts
+checkpoints/
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+
+# Training logs and outputs
+logs/
+*.log
+train_*.log
+nohup.out
+
+# Data files and datasets (usually large)
+data/
+datasets/
+*.csv
+*.json.gz
+*.parquet
+*.hdf5
+*.h5
+
+# Temporary and cache files
+tmp/
+temp/
+*.tmp
+*.temp

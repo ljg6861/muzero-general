@@ -1,7 +1,7 @@
 import datetime
 import pathlib
 
-import gym
+import gymnasium as gym
 import numpy
 import torch
 
@@ -132,8 +132,7 @@ class Game(AbstractGame):
     def __init__(self, seed=None):
         self.env = DeterministicLunarLander()
         # self.env = gym.make("LunarLander-v2")
-        if seed is not None:
-            self.env.seed(seed)
+        # Note: seeding is now handled through reset() method with seed parameter
 
     def step(self, action):
         """
@@ -145,7 +144,8 @@ class Game(AbstractGame):
         Returns:
             The new observation, the reward and a boolean if the game has ended.
         """
-        observation, reward, done, _ = self.env.step(action)
+        observation, reward, terminated, truncated, _ = self.env.step(action)
+        done = terminated or truncated
         return numpy.array([[observation]]), reward / 3, done
 
     def legal_actions(self):
@@ -168,7 +168,8 @@ class Game(AbstractGame):
         Returns:
             Initial observation of the game.
         """
-        return numpy.array([[self.env.reset()]])
+        observation, info = self.env.reset()
+        return numpy.array([[observation]])
 
     def close(self):
         """
@@ -242,9 +243,9 @@ except ModuleNotFoundError:
         'swig librairy and box2d-py are required to run lunarlander.\n\nPlease install swig with "sudo apt install swig" on Ubuntu or "brew install swig" on mac.\nThen run "pip install box2d-py".\nFor more detailed instructions: https://github.com/openai/gym'
     )
 
-import gym
-from gym import spaces
-from gym.utils import seeding, EzPickle
+import gymnasium as gym
+from gymnasium import spaces
+from gymnasium.utils import seeding, EzPickle
 
 FPS = 50
 SCALE = 30.0  # affects how fast-paced the game is, forces should be adjusted as well

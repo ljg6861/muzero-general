@@ -5,3 +5,11 @@ ray
 seaborn
 tensorboard
 torch
+transformers>=4.40.0
+gradio>=4.0.0
+scikit-learn
+matplotlib
+plotly
+pyvis
+datasets>=2.14.0
+pypdf>=4.2.0
