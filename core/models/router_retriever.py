@@ -4,6 +4,7 @@ import math
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import List, Tuple, Optional
+import os
 import re
 
 import numpy as np
@@ -79,8 +80,11 @@ class HybridRetriever:
         self.tfidf = SimpleTFIDFIndex()
         self.documents: List[str] = []
         self.embeddings: List[np.ndarray] = []
-        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        self.encoder = SentenceTransformer(embedding_model, device=self.device)
+        self.device = device or os.getenv("RETRIEVER_DEVICE") or ("cuda" if torch.cuda.is_available() else "cpu")
+        if device is not None:
+            os.environ["RETRIEVER_DEVICE"] = device
+        os.environ.setdefault("RETRIEVER_MODEL", embedding_model)
+        self.encoder = build_dense_encoder()
         self.dense_weight = dense_weight
         self.sparse_weight = sparse_weight
 
@@ -112,4 +116,14 @@ class HybridRetriever:
         return ranked[:top_k]
 
 
-__all__ = ["HybridRetriever", "RetrievalResult"]
+def build_dense_encoder():
+    """Construct a sentence-transformer encoder on the requested device."""
+
+    device = os.getenv("RETRIEVER_DEVICE", "cpu")
+    model_name = os.getenv("RETRIEVER_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+    encoder = SentenceTransformer(model_name, device=device)
+    encoder.max_seq_length = 256
+    return encoder
+
+
+__all__ = ["HybridRetriever", "RetrievalResult", "build_dense_encoder"]

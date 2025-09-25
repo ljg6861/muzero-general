@@ -35,7 +35,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 from torch.utils.data import Dataset, DataLoader
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, GPT2TokenizerFast
 
 # Optional imports - gracefully handle missing dependencies
 try:
@@ -51,6 +51,96 @@ except ImportError:
     _FAISS_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
+
+
+class AnswerConstraints:
+    """Container describing decoding constraints for answer generation."""
+
+    def __init__(
+        self,
+        entity_token_ids: Optional[torch.Tensor] = None,
+        numeric_regex: Optional[re.Pattern] = None,
+        date_regex: Optional[re.Pattern] = None,
+        hard: bool = True,
+    ) -> None:
+        self.entity_token_ids = entity_token_ids
+        self.numeric_regex = numeric_regex
+        self.date_regex = date_regex
+        self.hard = hard
+
+
+def build_entity_token_whitelist(tokenizer, candidate_strings: List[str]) -> Optional[torch.Tensor]:
+    """Tokenize candidate entity aliases and return the unique token id whitelist."""
+
+    ids: Set[int] = set()
+    for candidate in candidate_strings:
+        tokens = tokenizer.encode(candidate, add_special_tokens=False)
+        ids.update(int(tok) for tok in tokens)
+
+    if not ids:
+        return None
+    ordered = sorted(ids)
+    return torch.tensor(ordered, dtype=torch.long)
+
+
+def apply_answer_type_constraints(
+    logits: torch.Tensor,
+    step_ids: torch.Tensor,
+    tokenizer,
+    constraints: Optional[AnswerConstraints],
+    bias_val: float = -1e9,
+    soft_bias: float = -3.0,
+) -> torch.Tensor:
+    """Apply decoding constraints to logits without mutating the input tensor."""
+
+    if constraints is None:
+        return logits
+
+    if logits.ndim != 2:
+        raise ValueError("apply_answer_type_constraints expects logits with shape [B, V]")
+
+    vocab_size = logits.size(-1)
+    device = logits.device
+    out = logits.clone()
+
+    if constraints.entity_token_ids is not None and constraints.entity_token_ids.numel() > 0:
+        whitelist = constraints.entity_token_ids.to(device)
+        mask = torch.ones((vocab_size,), dtype=torch.bool, device=device)
+        mask[whitelist] = False
+        if constraints.hard:
+            out[:, mask] = bias_val
+        else:
+            out[:, mask] = out[:, mask] + soft_bias
+
+    if constraints.numeric_regex is not None or constraints.date_regex is not None:
+        digit_like_tokens: Set[int] = set()
+        for char in "0123456789-/:,.":
+            encoded = tokenizer.encode(char, add_special_tokens=False)
+            digit_like_tokens.update(int(tok) for tok in encoded)
+        if digit_like_tokens:
+            likely = torch.tensor(sorted(digit_like_tokens), dtype=torch.long, device=device)
+            mask = torch.ones((vocab_size,), dtype=torch.bool, device=device)
+            mask[likely] = False
+            out[:, mask] = out[:, mask] + soft_bias
+
+    return out
+
+
+def set_entity_constraints_from_candidates(
+    step_state: Dict[str, Any],
+    tokenizer,
+    candidate_strings: List[str],
+    hard: bool = True,
+) -> None:
+    """Populate ``step_state`` with an :class:`AnswerConstraints` instance."""
+
+    whitelist = build_entity_token_whitelist(tokenizer, candidate_strings)
+    step_state["constraints"] = AnswerConstraints(
+        entity_token_ids=whitelist,
+        numeric_regex=None,
+        date_regex=None,
+        hard=hard,
+    )
 
 # ===========================================================================================
 # SCHEMA REASONING - Answer type classification and constraints
@@ -370,6 +460,7 @@ class UnifiedCognitiveLM(nn.Module):
         self.enable_dynamics = enable_dynamics
         self.enable_span_proj = enable_span_proj
         self.enable_router = enable_router
+        self.tokenizer = None
         
         # Core transformer components
         self.embedding = nn.Embedding(vocab_size, hidden_size)
@@ -578,19 +669,47 @@ class UnifiedCognitiveLM(nn.Module):
         
         return {'entities': entities, 'passages': passages}
 
-    def generate_with_schema(self, input_ids, max_length=50, temperature=1.0, top_k=50, schema_type=None):
+    def generate_with_schema(
+        self,
+        input_ids,
+        max_length: int = 50,
+        temperature: float = 1.0,
+        top_k: int = 50,
+        schema_type=None,
+        constraints: Optional[AnswerConstraints] = None,
+        tokenizer=None,
+        step_state: Optional[Dict[str, Any]] = None,
+    ):
         """Generate text with schema-aware constraints"""
         self.eval()
         batch_size = input_ids.size(0)
         device = input_ids.device
         
         generated = input_ids.clone()
+        active_constraints = constraints
+        resolved_tokenizer = tokenizer or getattr(self, "tokenizer", None)
+        if resolved_tokenizer is None:
+            if constraints is not None:
+                raise ValueError("Tokenizer must be provided when using decoding constraints")
+        else:
+            if constraints is None and step_state is not None:
+                active_constraints = step_state.get("constraints")
         
         with torch.no_grad():
             for _ in range(max_length):
                 # Forward pass
                 logits, aux = self.forward(generated, return_schema=True)
                 next_token_logits = logits[:, -1, :] / temperature
+
+                if active_constraints is not None:
+                    if resolved_tokenizer is None:
+                        raise ValueError("Tokenizer required for constrained decoding")
+                    next_token_logits = apply_answer_type_constraints(
+                        next_token_logits,
+                        generated,
+                        resolved_tokenizer,
+                        active_constraints,
+                    )
                 
                 # Apply schema constraints if available
                 if schema_type is not None and 'schema' in aux:
@@ -685,8 +804,25 @@ class TextDataset(Dataset):
         # For causal LM, labels are the same as input_ids
         if self.include_labels:
             item['labels'] = input_ids.clone()
-            
+
         return item
+
+
+def causal_lm_loss(logits: torch.Tensor, labels: torch.Tensor, pad_id: int) -> torch.Tensor:
+    """Compute causal language modeling loss with padding masked out."""
+
+    if logits.ndim != 3 or labels.ndim != 2:
+        raise ValueError("Expected logits shape [B, T, V] and labels shape [B, T]")
+
+    shift_logits = logits[:, :-1, :].contiguous()
+    shift_labels = labels[:, 1:].contiguous()
+    mask = shift_labels != pad_id
+
+    if not mask.any():
+        return torch.tensor(0.0, dtype=logits.dtype, device=logits.device)
+
+    loss = F.cross_entropy(shift_logits[mask], shift_labels[mask], reduction="mean")
+    return loss
 
 class MetaCognitiveTrainer:
     """Training utilities for the unified meta-cognitive model"""
@@ -704,9 +840,9 @@ class MetaCognitiveTrainer:
         
         # Forward pass
         logits, aux = self.model.forward(input_ids, pad_token_id=self.tokenizer.pad_token_id, return_schema=compute_meta_losses)
-        
+
         # Language modeling loss
-        lm_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), labels.view(-1), ignore_index=self.tokenizer.pad_token_id)
+        lm_loss = causal_lm_loss(logits, labels, pad_id=self.tokenizer.pad_token_id)
         total_loss = lm_loss
         loss_dict = {'lm_loss': lm_loss.item()}
         
@@ -893,11 +1029,12 @@ class KnowledgeIntegrator:
             
             # Generate answer with schema constraint
             generated = self.model.generate_with_schema(
-                input_ids, 
+                input_ids,
                 max_length=max_tokens,
                 temperature=temperature,
                 top_k=top_k,
-                schema_type=predicted_type.value if predicted_type else None
+                schema_type=predicted_type.value if predicted_type else None,
+                tokenizer=self.tokenizer,
             )
         
         # Decode answer
@@ -976,19 +1113,31 @@ def create_unified_model(
     
     model = UnifiedCognitiveLM(vocab_size=vocab_size, **config)
     model.to(device)
-    
+
     logger.info(f"Created {model_type} unified model with {sum(p.numel() for p in model.parameters())} parameters")
     return model
 
+
 def create_tokenizer(model_name: str = "gpt2"):
-    """Create tokenizer with proper padding token"""
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    
-    # Add padding token if not present
+    """Create a GPT-2 tokenizer with explicit pad/eos tokens."""
+
+    tokenizer = GPT2TokenizerFast.from_pretrained(model_name)
+    special_tokens = {}
     if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-        
+        special_tokens["pad_token"] = "<|pad|>"
+    if tokenizer.eos_token is None:
+        special_tokens["eos_token"] = ""
+    if special_tokens:
+        tokenizer.add_special_tokens(special_tokens)
     return tokenizer
+
+
+def align_model_tokenizer(model: nn.Module, tokenizer) -> None:
+    """Ensure model embeddings match tokenizer vocabulary size."""
+
+    if not hasattr(model, "resize_token_embeddings"):
+        raise AttributeError("Model does not expose resize_token_embeddings")
+    model.resize_token_embeddings(len(tokenizer))
 
 # Example usage and testing
 if __name__ == "__main__":
