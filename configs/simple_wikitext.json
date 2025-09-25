@@ -1,8 +1,0 @@
-{
-    "description": "WikiText-2 dataset training (50M tokens)",
-    "dataset": "wikitext",
-    "config_name": "wikitext-2-raw-v1",
-    "split": "train",
-    "text_field": "text",
-    "tokens": 50000000
-}

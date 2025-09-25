@@ -15,6 +15,7 @@ Key Components:
 - PassageIndex: optional FAISS (IVF-PQ/HNSW-PQ) or pure PyTorch approximate search fallback.
 
 This module avoids external dependencies at import time: FAISS use is lazy and optional.
+Includes versioned snapshots and verifier guard capabilities.
 """
 from __future__ import annotations
 from dataclasses import dataclass
@@ -24,6 +25,8 @@ import random
 import threading
 import math
 import os
+import pickle
+import time
 
 import torch
 import torch.nn as nn
@@ -35,6 +38,14 @@ try:
     _FAISS_AVAILABLE = True
 except Exception:  # pragma: no cover
     _FAISS_AVAILABLE = False
+
+
+@dataclass
+class MemorySnapshotMeta:
+    """Metadata for memory snapshots."""
+    version: int
+    created_ts: float
+    path: str
 
 
 
@@ -348,22 +359,199 @@ class HybridMemoryEngine:
         self.entity_degree: Counter[str] = Counter()
         self.relation_counts: Counter[str] = Counter()
         self.ingestion_history: List[Dict[str, str]] = []
+        
+        # Versioning and snapshots
+        self._version = 0
+        self._snapshot_dir = os.environ.get("MEM_SNAPSHOT_DIR", "./mem_snapshots")
+        os.makedirs(self._snapshot_dir, exist_ok=True)
+        self._lock = threading.RLock()
 
     def ingest_fact(self, head: str, relation: str, tail: str, evidence_sentences: Optional[Iterable[str]] = None):
-        info = self._prepare_fact(head, relation, tail)
-        if not info["allowed"]:
+        with self._lock:
+            info = self._prepare_fact(head, relation, tail)
+            if not info["allowed"]:
+                return info
+            self.graph.add_edge(info["head"], info["relation"], info["tail"], confidence=info["confidence"])
+            rel_heads = self.facts_by_relation[info["relation"]]
+            rel_heads[info["head"]].add(info["tail"])
+            self.entity_degree[info["head"]] += 1
+            self.entity_degree[info["tail"]] += 1
+            self.relation_counts[info["relation"]] += 1
+            if evidence_sentences:
+                self.passage_index.add_passages(list(evidence_sentences), self.passage_encoder)
+                self.passage_index.rebuild()
+            self.ingestion_history.append(info)
+            
+            # Increment version after successful ingestion
+            self._version += 1
+            
             return info
-        self.graph.add_edge(info["head"], info["relation"], info["tail"], confidence=info["confidence"])
-        rel_heads = self.facts_by_relation[info["relation"]]
-        rel_heads[info["head"]].add(info["tail"])
-        self.entity_degree[info["head"]] += 1
-        self.entity_degree[info["tail"]] += 1
-        self.relation_counts[info["relation"]] += 1
-        if evidence_sentences:
-            self.passage_index.add_passages(list(evidence_sentences), self.passage_encoder)
-            self.passage_index.rebuild()
-        self.ingestion_history.append(info)
-        return info
+
+    def insert_with_verifier_guard(
+        self,
+        triple: Tuple[str, str, str],
+        evidence_text: str,
+        verifier,  # FactVerifier instance
+    ) -> bool:
+        """Insert fact with verifier guard for schema-aware validation."""
+        head, relation, tail = triple
+        canonical_head = self._canonicalize_entity(head)
+        canonical_tail = self._canonicalize_entity(tail)
+        canonical_relation, schema = self._canonicalize_relation(relation)
+        
+        hypothesis = f"{canonical_head} {canonical_relation} {canonical_tail}"
+        
+        # Use verifier to score the fact
+        if hasattr(verifier, 'entailment_score'):
+            # Root version interface
+            score = verifier.entailment_score(evidence_text, hypothesis)
+            threshold_loose = getattr(verifier, 'threshold_loose', 0.6)
+            threshold_strict = getattr(verifier, 'threshold_strict', 0.8)
+        else:
+            # Core version interface - create a mock candidate for verification
+            from ..data.fact_extraction import FactCandidate
+            candidate = FactCandidate(
+                head=canonical_head,
+                relation=canonical_relation,
+                tail=canonical_tail,
+                sentence=evidence_text
+            )
+            results = verifier.verify([candidate])
+            score = 1.0 if results else 0.0
+            threshold_loose = verifier.threshold
+            threshold_strict = verifier.threshold
+
+        with self._lock:
+            if schema and schema.functional:
+                # Check for existing functional relationship
+                rel_heads = self.facts_by_relation[canonical_relation]
+                existing_tails = rel_heads.get(canonical_head, set())
+                
+                if not existing_tails:
+                    # No existing relationship, use loose threshold
+                    if score >= threshold_loose:
+                        self.ingest_fact(canonical_head, canonical_relation, canonical_tail, [evidence_text])
+                        return True
+                    return False
+                
+                if canonical_tail in existing_tails:
+                    # Same fact already exists
+                    return True
+                    
+                # Conflicting functional relationship, use strict threshold
+                if score >= threshold_strict:
+                    # Replace existing relationship
+                    rel_heads[canonical_head] = {canonical_tail}
+                    self.conflict_log.append({
+                        "type": "functional_replace",
+                        "head": canonical_head,
+                        "relation": canonical_relation,
+                        "old_tail": str(existing_tails),
+                        "new_tail": canonical_tail,
+                        "evidence": evidence_text,
+                        "score": score
+                    })
+                    self.ingest_fact(canonical_head, canonical_relation, canonical_tail, [evidence_text])
+                    return True
+                return False
+            
+            # Non-functional relationship, use loose threshold
+            if score >= threshold_loose:
+                self.ingest_fact(canonical_head, canonical_relation, canonical_tail, [evidence_text])
+                return True
+            return False
+
+    def get_version(self) -> int:
+        """Get current version number."""
+        with self._lock:
+            return self._version
+
+    def save_snapshot(self) -> MemorySnapshotMeta:
+        """Save current memory state to disk."""
+        with self._lock:
+            meta = MemorySnapshotMeta(
+                version=self._version,
+                created_ts=time.time(),
+                path=os.path.join(self._snapshot_dir, f"mem_v{self._version}.pkl"),
+            )
+            
+            # Serialize the state
+            state = {
+                "version": self._version,
+                "entities": {e.name: e.eid for e in self.graph.entities},
+                "relations": {r.name: r.rid for r in self.graph.relations},
+                "facts_by_relation": {
+                    rel: {head: list(tails) for head, tails in heads.items()}
+                    for rel, heads in self.facts_by_relation.items()
+                },
+                "entity_aliases": dict(self.entity_aliases),
+                "relation_counts": dict(self.relation_counts),
+                "entity_degree": dict(self.entity_degree),
+                "conflict_log": self.conflict_log.copy(),
+                "passages": self.passage_index.passages.copy() if self.passage_index.passages else []
+            }
+            
+            with open(meta.path, "wb") as f:
+                pickle.dump(state, f, protocol=pickle.HIGHEST_PROTOCOL)
+                
+            return meta
+
+    def load_snapshot(self, path: str) -> None:
+        """Load memory state from disk snapshot."""
+        with open(path, "rb") as f:
+            state = pickle.load(f)
+            
+        with self._lock:
+            # Clear current state
+            self.graph = EntityRelationGraph(emb_dim=self.graph.emb_dim)
+            self.facts_by_relation = defaultdict(lambda: defaultdict(set))
+            self.entity_aliases = {}
+            self.relation_counts = Counter()
+            self.entity_degree = Counter()
+            self.conflict_log = []
+            self.passage_index = PassageIndex(dim=self.passage_index.dim, use_faiss=self.passage_index.use_faiss)
+            
+            # Restore state
+            self._version = state.get("version", 0)
+            self.entity_aliases = state.get("entity_aliases", {})
+            self.relation_counts = Counter(state.get("relation_counts", {}))
+            self.entity_degree = Counter(state.get("entity_degree", {}))
+            self.conflict_log = state.get("conflict_log", [])
+            
+            # Rebuild facts
+            facts_by_relation = state.get("facts_by_relation", {})
+            for relation, heads in facts_by_relation.items():
+                for head, tails in heads.items():
+                    for tail in tails:
+                        self.graph.add_edge(head, relation, tail)
+                        self.facts_by_relation[relation][head].add(tail)
+            
+            # Restore passages
+            passages = state.get("passages", [])
+            if passages:
+                self.passage_index.add_passages(passages, self.passage_encoder)
+
+    def latest_snapshot_path(self) -> Optional[str]:
+        """Get path to the latest snapshot file."""
+        if not os.path.exists(self._snapshot_dir):
+            return None
+            
+        files = [
+            f for f in os.listdir(self._snapshot_dir) 
+            if f.startswith("mem_v") and f.endswith(".pkl")
+        ]
+        if not files:
+            return None
+            
+        # Sort by version number
+        def extract_version(filename):
+            try:
+                return int(filename.split("mem_v")[1].split(".pkl")[0])
+            except (ValueError, IndexError):
+                return -1
+                
+        files.sort(key=extract_version)
+        return os.path.join(self._snapshot_dir, files[-1])
 
     def query(self, entity: str, topk_neighbors: int = 5, topk_passages: int = 5):
         neighbors_raw = self.graph.neighbors(self._canonicalize_entity(entity))
@@ -508,5 +696,9 @@ class HybridMemoryEngine:
 
 __all__ = [
     "EntityRelationGraph",
-    "HybridMemoryEngine",
+    "HybridMemoryEngine", 
+    "MemorySnapshotMeta",
+    "RelationSchema",
+    "SentenceEncoder",
+    "PassageIndex",
 ]

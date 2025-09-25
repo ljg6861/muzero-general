@@ -1,6 +1,0 @@
-{
-    "dataset": "wikimedia/wikipedia",
-    "config_name": "20231101.en",
-    "text_field": "text",
-    "tokens": 5000000
-}

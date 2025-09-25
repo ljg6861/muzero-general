@@ -1,8 +1,0 @@
-{
-    "description": "GSM8K math problems dataset training (5M tokens)",
-    "dataset": "openai/gsm8k",
-    "config_name": "main",
-    "split": "train",
-    "text_field": "question",
-    "tokens": 5000000
-}

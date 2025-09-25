@@ -1,8 +1,0 @@
-{
-    "description": "MS MARCO dataset training (25M tokens)",
-    "dataset": "microsoft/ms_marco",
-    "config_name": "v1.1",
-    "split": "train",
-    "text_field": "query",
-    "tokens": 25000000
-}
