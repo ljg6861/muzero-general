@@ -31,7 +31,12 @@ import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from sentence_transformers import SentenceTransformer
+
+try:
+    from sentence_transformers import SentenceTransformer
+    _SENTENCE_TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    _SENTENCE_TRANSFORMERS_AVAILABLE = False
 
 try:
     import faiss  # type: ignore
@@ -269,11 +274,20 @@ class PassageIndex:
         if not self.use_faiss:
             return
         if self._index is None:
-            quantizer = faiss.IndexFlatL2(self.dim)
-            nlist = max(1, min(128, max(1, len(self.passages) // 8)))
-            self._index = faiss.IndexIVFFlat(quantizer, self.dim, nlist)
+            # Use flat index for small datasets to avoid clustering warnings
+            # FAISS IVF needs ~39 training points per centroid
+            num_passages = len(self.passages)
+            if num_passages < 1000:  # Use flat index for small datasets
+                self._index = faiss.IndexFlatL2(self.dim)
+            else:
+                # Only use IVF with proper centroid sizing
+                quantizer = faiss.IndexFlatL2(self.dim)
+                nlist = max(1, min(128, num_passages // 50))  # At least 50 points per centroid
+                self._index = faiss.IndexIVFFlat(quantizer, self.dim, nlist)
+                
             if self.embeddings is not None and self.embeddings.size(0) > 0:
-                self._index.train(self.embeddings.numpy())
+                if hasattr(self._index, 'train'):  # IVF indices need training
+                    self._index.train(self.embeddings.numpy())
                 self._index.add(self.embeddings.numpy())
 
     def add_passages(self, passages: Sequence[str], encoder: "SentenceEncoder") -> None:
@@ -282,6 +296,11 @@ class PassageIndex:
         with torch.no_grad():
             encoded = encoder.encode(passages)
         encoded = encoded.to(torch.float16).cpu()
+        
+        # Validate dimension compatibility
+        if encoded.size(1) != self.dim:
+            raise ValueError(f"Encoder produces {encoded.size(1)}D embeddings but PassageIndex expects {self.dim}D")
+        
         if self.embeddings is None or self.embeddings.numel() == 0:
             self.embeddings = encoded
             self.passages = list(passages)
@@ -323,6 +342,8 @@ class SentenceEncoder:
     """Wrapper around sentence-transformer models for embedding evidence."""
 
     def __init__(self, model_name: str = "sentence-transformers/all-MiniLM-L6-v2", device: Optional[str] = None):
+        if not _SENTENCE_TRANSFORMERS_AVAILABLE:
+            raise ImportError("sentence-transformers not available. Install with: pip install sentence-transformers")
         self.model_name = model_name
         self.device = torch.device(device) if device else torch.device("cpu")
         self.model = SentenceTransformer(model_name, device=str(self.device))
@@ -344,13 +365,21 @@ class HybridMemoryEngine:
     def __init__(
         self,
         entity_dim: int = 128,
-        passage_dim: int = 384,
+        passage_dim: Optional[int] = None,  # Auto-detect from encoder if not provided
         use_faiss: bool = True,
         passage_encoder: Optional[SentenceEncoder] = None,
     ):
         self.graph = EntityRelationGraph(emb_dim=entity_dim)
-        self.passage_index = PassageIndex(dim=passage_dim, use_faiss=use_faiss)
         self.passage_encoder = passage_encoder or SentenceEncoder()
+        
+        # Auto-detect passage dimension from encoder if not provided
+        if passage_dim is None:
+            if _SENTENCE_TRANSFORMERS_AVAILABLE:
+                passage_dim = self.passage_encoder.model.get_sentence_embedding_dimension()
+            else:
+                passage_dim = 384  # Default fallback
+        
+        self.passage_index = PassageIndex(dim=passage_dim, use_faiss=use_faiss)
         self.entity_aliases: Dict[str, str] = {}
         self.relation_schema = DEFAULT_RELATION_SCHEMA.copy()
         self.relation_aliases = RELATION_ALIASES.copy()

@@ -683,10 +683,15 @@ def create_data_config_from_config(config: Dict[str, Any]) -> DataConfig:
         # Set sequence length (with context ramping support)
         training_section = config.get('training', {})
         context_ramping = training_section.get('context_ramping', {})
+        ctx_len_schedule = training_section.get('ctx_len_schedule', {})
+        
         if 'stages' in context_ramping and context_ramping['stages']:
             # Use initial context length for now, ramping will be handled in training loop
             initial_stage = context_ramping['stages'][0]
             data_config.seq_length = initial_stage['context_length']
+        elif 'initial' in ctx_len_schedule:
+            # Handle Phase 1 style ctx_len_schedule
+            data_config.seq_length = ctx_len_schedule['initial']
         else:
             data_config.seq_length = training_section.get('context_length', 1024)
         
@@ -958,7 +963,7 @@ def main():
     # Get model configuration from config file or use defaults
     model_config = config.get('model', {})
     model = create_unified_model(
-        vocab_size=tokenizer.vocab_size,
+        vocab_size=len(tokenizer),  # Use len(tokenizer) to account for added special tokens
         hidden_size=model_config.get('hidden_size', 256),
         num_layers=model_config.get('num_layers', 4), 
         num_heads=model_config.get('num_heads', 4),
@@ -1018,7 +1023,7 @@ def main():
         # Initialize hybrid memory with correct parameters
         hybrid_memory = HybridMemoryEngine(
             entity_dim=128,
-            passage_dim=256,
+            passage_dim=None,  # Auto-detect from encoder (384D for all-MiniLM-L6-v2)
             use_faiss=True
         )
         

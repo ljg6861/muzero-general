@@ -1,71 +1,46 @@
 {
-    "description": "Phase 1 - Broad General Pretrain (Foundation)",
+    "description": "Phase 1 - Working Datasets Only",
     "phase": 1,
-    "target_tokens": 1500000000,
+    "target_tokens": 150000000,
     "mix": {
-        "description": "Token mixing by percentage",
-        "clean_web": 0.40,
-        "wikipedia": 0.20,
-        "books": 0.15,
-        "stackexchange": 0.15,
-        "arxiv_pubmed": 0.10
+        "description": "Token mixing with working datasets only",
+        "wikipedia": 0.40,
+        "wikitext": 0.30,
+        "books": 0.30
     },
     "data_sources": [
-        {
-            "name": "clean_web",
-            "dataset": "HuggingFaceFW/fineweb",
-            "text_field": "text",
-            "weight": 0.40,
-            "description": "Clean web text - heavily deduped and filtered"
-        },
-        {
-            "name": "clean_web_alt",
-            "dataset": "wikitext",
-            "config_name": "wikitext-2-raw-v1",
-            "text_field": "text",
-            "weight": 0.0,
-            "description": "Fallback clean web source"
-        },
         {
             "name": "wikipedia",
             "dataset": "wikimedia/wikipedia",
             "config_name": "20231101.en",
             "text_field": "text",
-            "weight": 0.20,
+            "weight": 0.40,
             "description": "Full Wikipedia English"
         },
         {
             "name": "books",
             "dataset": "rojagtap/bookcorpus",
             "text_field": "text",
-            "weight": 0.15,
-            "description": "Books corpus (PG-19 style)"
+            "weight": 0.30,
+            "description": "Books corpus"
         },
         {
-            "name": "stackexchange",
+            "name": "wikitext",
             "dataset": "wikitext",
             "config_name": "wikitext-103-raw-v1",
             "text_field": "text",
-            "weight": 0.15,
-            "description": "Educational text content (wikitext fallback)"
-        },
-        {
-            "name": "scientific",
-            "dataset": "allenai/peS2o",
-            "config_name": "abstract",
-            "text_field": "abstract",
-            "weight": 0.10,
-            "description": "arXiv + PubMed abstracts"
+            "weight": 0.30,
+            "description": "Wikitext corpus"
         }
     ],
     "training": {
         "ctx_len_schedule": {
             "initial": 1024,
             "ramp_to": 2048,
-            "ramp_at_tokens": 150000000,
+            "ramp_at_tokens": 50000000,
             "long_ctx_percentage": 0.05,
             "long_ctx_len": 4096,
-            "long_ctx_start_tokens": 750000000
+            "long_ctx_start_tokens": 100000000
         },
         "sampling": {
             "temperature": 0.7,
@@ -76,10 +51,10 @@
         "batch_size": 16,
         "accumulation_steps": 8,
         "learning_rate": 5e-4,
-        "warmup_tokens": 100000000,
+        "warmup_tokens": 20000000,
         "weight_decay": 0.01,
-        "eval_every": 5000,
-        "save_every": 10000,
+        "eval_every": 2000,
+        "save_every": 5000,
         "log_every": 100
     },
     "model": {

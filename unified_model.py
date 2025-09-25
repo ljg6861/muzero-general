@@ -568,9 +568,27 @@ class UnifiedCognitiveLM(nn.Module):
         batch_size, seq_len = input_ids.shape
         device = input_ids.device
         
-        # Token and position embeddings
+        # Validate input_ids are within vocab bounds
+        vocab_size = self.embedding.num_embeddings
+        if input_ids.min() < 0 or input_ids.max() >= vocab_size:
+            raise ValueError(f"input_ids out of bounds: range=[{input_ids.min()}, {input_ids.max()}], vocab_size={vocab_size}")
+        
+        # Ensure sequence length doesn't exceed model's maximum
+        max_supported_len = self.pos_embedding.num_embeddings
+        if seq_len > max_supported_len:
+            raise ValueError(f"Input sequence length {seq_len} exceeds model's maximum supported length {max_supported_len}")
+        
+        # Token embeddings
         token_embeddings = self.embedding(input_ids)
-        position_ids = self.pos_ids_full[:seq_len].unsqueeze(0).expand(batch_size, -1)
+        
+        # Create position IDs safely instead of using cached buffer
+        # This prevents any corruption or device mismatch issues
+        position_ids = torch.arange(seq_len, dtype=torch.long, device=device).unsqueeze(0).expand(batch_size, -1)
+        
+        # Ensure position_ids are within valid range
+        if position_ids.max() >= max_supported_len:
+            raise ValueError(f"Generated position_ids max {position_ids.max()} >= embedding size {max_supported_len}")
+        
         position_embeddings = self.pos_embedding(position_ids)
         
         hidden_states = token_embeddings + position_embeddings
