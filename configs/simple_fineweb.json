@@ -1,0 +1,5 @@
+{
+    "dataset": "HuggingFaceFW/fineweb",
+    "text_field": "text",
+    "tokens": 10000000
+}

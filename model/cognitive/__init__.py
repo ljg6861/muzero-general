@@ -1,1 +1,0 @@
-# Cognitive architecture components

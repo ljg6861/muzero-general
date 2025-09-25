@@ -1,0 +1,15 @@
+{
+  "model_path": "checkpoints/lm_current.pth",
+  "config": "benchmark_open_qa",
+  "results": {},
+  "baseline_comparison": {},
+  "summary": {
+    "total_samples": 0,
+    "average_exact_match": 0,
+    "average_f1": 0,
+    "average_evidence_score": 0,
+    "gap_to_1b_models": 0,
+    "gap_to_3b_models": 0,
+    "performance_tier": "below_1b"
+  }
+}

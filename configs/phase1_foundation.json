@@ -1,0 +1,110 @@
+{
+    "description": "Phase 1 - Broad General Pretrain (Foundation)",
+    "phase": 1,
+    "target_tokens": 1500000000,
+    
+    "mix": {
+        "description": "Token mixing by percentage",
+        "clean_web": 0.40,
+        "wikipedia": 0.20,
+        "books": 0.15,
+        "stackexchange": 0.15,
+        "arxiv_pubmed": 0.10
+    },
+    
+    "data_sources": [
+        {
+            "name": "clean_web",
+            "dataset": "HuggingFaceFW/fineweb",
+            "text_field": "text",
+            "weight": 0.40,
+            "description": "Clean web text - heavily deduped and filtered"
+        },
+        {
+            "name": "clean_web_alt", 
+            "dataset": "allenai/c4",
+            "config_name": "en",
+            "text_field": "text",
+            "weight": 0.0,
+            "description": "Fallback clean web source"
+        },
+        {
+            "name": "wikipedia",
+            "dataset": "wikimedia/wikipedia",
+            "config_name": "20231101.en", 
+            "text_field": "text",
+            "weight": 0.20,
+            "description": "Full Wikipedia English"
+        },
+        {
+            "name": "books",
+            "dataset": "bookscorpus",
+            "text_field": "text", 
+            "weight": 0.15,
+            "description": "Books corpus (PG-19 style)"
+        },
+        {
+            "name": "stackexchange",
+            "dataset": "HuggingFaceFW/fineweb-edu",
+            "text_field": "text",
+            "weight": 0.15,
+            "description": "Educational Q&A content (StackExchange style)"
+        },
+        {
+            "name": "scientific",
+            "dataset": "allenai/s2orc",
+            "config_name": "abstract",
+            "text_field": "abstract",
+            "weight": 0.10,
+            "description": "arXiv + PubMed abstracts"
+        }
+    ],
+    
+    "training": {
+        "ctx_len_schedule": {
+            "initial": 1024,
+            "ramp_to": 2048,
+            "ramp_at_tokens": 150000000,
+            "long_ctx_percentage": 0.05,
+            "long_ctx_len": 4096,
+            "long_ctx_start_tokens": 750000000
+        },
+        
+        "sampling": {
+            "temperature": 0.7,
+            "description": "Up-weight rare/high-value shards"
+        },
+        
+        "sequence_packing": true,
+        "cross_doc_attention": false,
+        
+        "batch_size": 32,
+        "accumulation_steps": 4,
+        "learning_rate": 5e-4,
+        "warmup_tokens": 100000000,
+        "weight_decay": 0.01,
+        
+        "eval_every": 5000,
+        "save_every": 10000,
+        "log_every": 100
+    },
+    
+    "model": {
+        "vocab_size": 50257,
+        "hidden_size": 768,
+        "num_layers": 12,
+        "num_heads": 12,
+        "max_seq_len": 2048,
+        "enable_router": true,
+        "enable_schema_inference": true,
+        "enable_hybrid_memory": true,
+        "enable_self_correction": true
+    },
+    
+    "memory": {
+        "async_fact_ingestion": true,
+        "router_supervision": true,
+        "memory_aux_loss_weight": 0.05,
+        "router_loss_weight": 0.1
+    }
+}

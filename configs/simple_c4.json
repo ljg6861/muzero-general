@@ -1,0 +1,6 @@
+{
+    "dataset": "allenai/c4",
+    "config_name": "en",
+    "text_field": "text",
+    "tokens": 15000000
+}

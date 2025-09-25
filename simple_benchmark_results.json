@@ -1,0 +1,65 @@
+{
+  "total_questions": 5,
+  "total_time_seconds": 0.37081027030944824,
+  "average_time_per_question": 0.07416205406188965,
+  "questions_per_second": 13.483984669106938,
+  "results": [
+    {
+      "question": "What is the capital of France?",
+      "answer": "vict\u2212 NUMauthAd\u30c3\u30c9 vomiting trackedCorp Supreme laughable burnt byte developments Indians Frieza distingu illnesses Sign Bowling Solutions deputy FahabamaquadReader\u25a0inside rewriting Instagram",
+      "predicted_type": "year",
+      "validation_confidence": 0.46521541476249695,
+      "time_seconds": 0.22045159339904785,
+      "reasoning_summary": {
+        "knowledge_used": 0
+      }
+    },
+    {
+      "question": "Who wrote Romeo and Juliet?",
+      "answer": "Ad StargLearn 32 besrant leisureUNCH Cost hospitals actively DHS explicitly influxabbShapefor Carl federal mages stationaryIFICWithNoall spurious perish oblig acknowledged Popular agents",
+      "predicted_type": "color",
+      "validation_confidence": 0.4732506275177002,
+      "time_seconds": 0.03809785842895508,
+      "reasoning_summary": {
+        "knowledge_used": 0
+      }
+    },
+    {
+      "question": "What is 2 + 2?",
+      "answer": "\ufffdlearn nowadays1100 shut listenersassion Kok anticipate Fargo chicks originatinguniversalperor poetic hig satellites inefficientuberty capacities burnirmefficiency anecdote Victor melted drainage154aciaauthored",
+      "predicted_type": "color",
+      "validation_confidence": 0.4720453917980194,
+      "time_seconds": 0.03592085838317871,
+      "reasoning_summary": {
+        "knowledge_used": 0
+      }
+    },
+    {
+      "question": "What is the largest planet in our solar system?",
+      "answer": "Joshiel final526 ruth014 facadeprusRArelevantuke Connect606 Dover congestion indoctr genesis VIDESingle intro Ukrainstrike hosp comment rainfall townshipcomed Saul mo desks",
+      "predicted_type": "organization",
+      "validation_confidence": 0.5166624188423157,
+      "time_seconds": 0.03754472732543945,
+      "reasoning_summary": {
+        "knowledge_used": 0
+      }
+    },
+    {
+      "question": "When did World War II end?",
+      "answer": "PAGEribed gladTA misc 127 catching commentators PoperikRockocating Cust Lent GHiavaealde676 gigg intercept undertaken Sites Citizenshipateur 191 problematicNovemberumatossus",
+      "predicted_type": "capital_city",
+      "validation_confidence": 0.46784651279449463,
+      "time_seconds": 0.03844046592712402,
+      "reasoning_summary": {
+        "knowledge_used": 0
+      }
+    }
+  ],
+  "model_info": {
+    "parameters": 71500407,
+    "device": "cuda",
+    "meta_reasoning": true,
+    "schema_inference": true,
+    "hybrid_memory": true
+  }
+}

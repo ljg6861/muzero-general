@@ -1,0 +1,5 @@
+{
+    "dataset": "imdb",
+    "text_field": "text",
+    "tokens": 1000000
+}

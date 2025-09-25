@@ -1,13 +1,111 @@
-# MuZero-General (Focused LM Evolution)
+# Meta-Cognitive Language Model
 
-Single interactive training entrypoint (`main.py`) with zero runtime flags. Edit JSON presets under `configs/` to change behavior.
+A breakthrough architecture that separates **schema knowledge** from **factual recall** to enable small models to punch above their parameter class.
 
-## Highlights
-- 1-command training (interactive preset selection)
-- Fixed 100M token target per run
-- Rolling checkpoints: `lm_current.pth`, `lm_prev.pth`, `lm_prev2.pth`
-- Streaming real data (HF + PDF) with round-robin / sequential / weighted mixing
-- Q/A formatting via multi-field Hugging Face dataset sources
+## 🧠 Architecture Overview
+
+```
+Question → Schema Inference → Memory Retrieval → Constrained Generation → Self-Validation → Answer
+```
+
+### Core Components
+
+1. **Meta-Reasoning Engine** (`core/models/`)
+   - **Schema Inference**: Predicts answer types from questions
+   - **Type-Constrained Generation**: Filters outputs by semantic category  
+   - **Self-Correction**: Validates answers against schemas
+   - **Enhanced LM**: Complete meta-cognitive language model
+
+2. **Hybrid Memory System** (`core/models/`)
+   - **Entity-Relation Graph**: Structured fact storage with type info
+   - **Passage Index**: Dense/sparse retrieval with FAISS
+   - **Quantized Embeddings**: Memory-efficient representation
+
+3. **Data Processing** (`core/data/`)
+   - **Multi-source loading**: Natural Questions, MS MARCO, Wikipedia
+   - **Fact extraction**: Structured fact mining from text
+   - **Fact verification**: Consistency and accuracy validation
+
+## 🚀 Quick Start
+
+**Training is now simplified! Use the dedicated training script:**
+
+```bash
+# Single GPU training
+python train.py configs/simple_nq.json
+
+# Multi-GPU training  
+torchrun --nproc_per_node=2 train.py configs/simple_wikitext.json
+```
+
+**Simple config format - just specify dataset and tokens:**
+```json
+{
+    "description": "Natural Questions training",
+    "dataset": "sentence-transformers/natural-questions", 
+    "text_field": "query",
+    "tokens": 10000000
+}
+```
+
+**For benchmarks and evaluation, use main.py:**
+```bash
+python main.py  # Interactive config selection
+```
+
+## 📁 Project Structure
+
+```
+├── train.py                   # Simple training script (NEW!)
+├── main.py                    # Benchmarks & evaluation  
+├── configs/                   
+│   ├── simple_*.json          # Simple training configs
+│   └── router_quiz.json       # Complex benchmark configs
+├── core/
+│   ├── models/               # Neural architectures
+│   │   ├── enhanced_lm.py    # Meta-cognitive language model
+│   │   ├── schema_reasoning.py # Schema inference system
+│   │   ├── hybrid_memory.py  # Entity-relation + passage memory
+│   │   └── router_retriever.py # Query routing
+│   └── data/                 # Data processing
+│       ├── data_registry.py  # Multi-source data loading
+│       ├── fact_extraction.py # Fact mining
+│       └── fact_verifier.py  # Fact validation
+├── tests/                    # Test suite
+├── checkpoints/              # Model checkpoints
+├── logs/                     # Training logs
+└── archive/                  # Archived/unused files
+```
+
+## 🎯 Key Innovation
+
+**Traditional LM**: Scale = Intelligence (bigger models → better performance)  
+**Meta-Cognitive LM**: Structure = Intelligence (smarter reasoning → better performance)
+
+- **40M parameters** with **100M+ model capabilities**
+- **Explicit reasoning** about what TYPE of answer to give
+- **External fact storage** separate from model parameters  
+- **Self-aware validation** of generated outputs
+
+## 📊 Training Configuration
+
+The `router_quiz.json` config is optimized for fact learning:
+- **50M tokens** for optimal parameter coverage
+- **Enhanced data mix**: Natural Questions (4) + MS MARCO (2) + Wikipedia (1)  
+- **Meta-reasoning**: Schema loss weight 0.2, constraint strength 0.3
+- **Self-correction**: Validation threshold 0.7, refinement enabled
+
+## 💡 Meta-Reasoning Example
+
+**Question**: "What is the capital of France?"
+
+1. **Schema Inference**: Recognizes this expects a `CAPITAL_CITY` type
+2. **Memory Retrieval**: Queries entity-relation graph for France→capital facts
+3. **Constrained Generation**: Filters output to city names only
+4. **Self-Validation**: Confirms "Paris" matches expected city schema
+5. **Result**: "Paris" (precise, type-appropriate, validated)
+
+This is the future of AI: **models that think about their own thinking**! 🧠✨
 - bf16 / TF32 acceleration, DDP multi-GPU, gradient accumulation
 - No hardcoded tasks, no prompt hacks, no synthetic fallback
 
