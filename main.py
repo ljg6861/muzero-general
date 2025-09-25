@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""
-MuZero-General: Benchmark and Evaluation
-========================================
+"""MuZero-General benchmark entry point with shared utilities."""
 
-Main entry point for running benchmarks and evaluations.
-For training, use train.py instead.
-"""
-
+import csv
 import os
 import sys
 import json
+import time
 from pathlib import Path
 from dotenv import load_dotenv
+
+import torch.distributed as dist
+
+from hybrid_memory import HybridMemoryEngine
+from unified_model import causal_lm_loss, create_tokenizer, align_model_tokenizer
 
 # Load environment variables from .env file
 load_dotenv()
@@ -22,6 +23,42 @@ os.environ.setdefault('HF_HUB_ENABLE_HF_TRANSFER', '1')
 os.environ.setdefault('HF_HUB_DISABLE_TELEMETRY', '1')
 os.environ.setdefault('PYTORCH_CUDA_ALLOC_CONF', 'expandable_segments:True')
 os.environ.setdefault('TOKENIZERS_PARALLELISM', 'false')
+
+
+class CSVLogger:
+    """Minimal CSV metrics logger."""
+
+    def __init__(self, path: str) -> None:
+        self.path = path
+        if not os.path.exists(path):
+            with open(path, "w", newline="") as handle:
+                csv.writer(handle).writerow(["ts", "step", "split", "metric", "value"])
+
+    def log(self, step: int, split: str, metric: str, value: float) -> None:
+        with open(self.path, "a", newline="") as handle:
+            csv.writer(handle).writerow([int(time.time()), int(step), split, metric, float(value)])
+
+
+metrics = CSVLogger(os.getenv("METRICS_CSV", "metrics.csv"))
+
+
+def maybe_refresh_memory_snapshot(memory: HybridMemoryEngine, last_loaded_version: int) -> int:
+    """Refresh hybrid memory snapshot for non-writer ranks."""
+
+    latest_path = memory.latest_snapshot_path()
+    if latest_path is None:
+        return last_loaded_version
+    latest_ver = int(os.path.basename(latest_path).split("mem_v")[1].split(".pkl")[0])
+    if latest_ver > last_loaded_version:
+        memory.load_snapshot(latest_path)
+        return latest_ver
+    return last_loaded_version
+
+
+def is_rank0() -> bool:
+    if not dist.is_available() or not dist.is_initialized():
+        return True
+    return dist.get_rank() == 0
 
 def select_config():
     """Interactive config selection"""
