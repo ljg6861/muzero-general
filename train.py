@@ -885,45 +885,64 @@ def load_checkpoint(model: nn.Module, optimizer: torch.optim.Optimizer) -> Tuple
         return 0, 0, 0.0
 
 
-def train_step(model: nn.Module, batch: Dict[str, torch.Tensor], device: torch.device) -> Tuple[torch.Tensor, int]:
+def train_step(
+    model: nn.Module,
+    batch: Dict[str, torch.Tensor],
+    device: torch.device,
+    pad_token_id: Optional[int],
+) -> Tuple[torch.Tensor, int]:
     """Single training step with unified model"""
+
     input_ids = batch['input_ids'].to(device)
-    
+
+    # Determine which token should be treated as padding.
+    # Fallback to EOS → 0 if tokenizer did not define pad token.
+    effective_pad_id = pad_token_id
+    if effective_pad_id is None:
+        pad_from_batch = batch.get('pad_token_id')
+        if pad_from_batch is not None:
+            if isinstance(pad_from_batch, torch.Tensor):
+                effective_pad_id = int(pad_from_batch.item())
+            else:
+                effective_pad_id = int(pad_from_batch)
+    if effective_pad_id is None:
+        effective_pad_id = 0
+
     # Get model outputs using the correct interface
     base_model = model.module if hasattr(model, 'module') else model
-        
-    # Forward pass through UnifiedCognitiveLM
-    outputs = base_model(input_ids, pad_token_id=0)  # Assume pad_token_id=0 for simplicity
-    
+
+    # Forward pass through UnifiedCognitiveLM using the real pad token id
+    outputs = base_model(input_ids, pad_token_id=effective_pad_id)
+
     if isinstance(outputs, tuple):
         logits = outputs[0]
     else:
         logits = outputs
-    
-    # Compute standard causal language modeling loss 
+
+    # Compute standard causal language modeling loss
     shift_logits = logits[..., :-1, :].contiguous()
     shift_labels = input_ids[..., 1:].contiguous()
-    
+
     # Count valid tokens (avoid padding tokens)
-    pad_mask = shift_labels != 0  # Assuming 0 is pad token
+    pad_mask = shift_labels != effective_pad_id
     valid_tokens = pad_mask.sum().item()
-    
+
     # Compute loss with proper pad masking
     loss_flat = F.cross_entropy(
         shift_logits.view(-1, shift_logits.size(-1)),
         shift_labels.view(-1),
         reduction='none'
     )
-    
+
     # Apply mask and compute mean over valid tokens only
     loss_per_token = loss_flat.view(shift_labels.shape)
     masked_loss = loss_per_token * pad_mask.float()
-    
+
     if valid_tokens > 0:
         loss = masked_loss.sum() / valid_tokens
     else:
         loss = masked_loss.sum()  # Fallback
-    
+
     return loss, valid_tokens
 
 
@@ -1104,6 +1123,11 @@ def main():
     current_temperature = temp_schedule.get('initial', 0.8)
     
     scaler = GradScaler(enabled=torch.cuda.is_available())
+
+    # Determine pad token id once to avoid repeated checks
+    pad_token_id = tokenizer.pad_token_id
+    if pad_token_id is None:
+        pad_token_id = tokenizer.eos_token_id
     
     if rank == 0:
         print(f"✓ Training configured")
@@ -1132,18 +1156,46 @@ def main():
     # Track context ramping state
     context_ramp_triggered = set()  # Track which stages have been triggered
     
+    # Progress indicators
+    last_progress_time = time.time()
+    batch_start_time = None
+    
+    if rank == 0:
+        print("🔄 Initializing data loading...")
+    
     try:
         # Create iterator from dataloader
         dataloader_iter = iter(train_dataloader)
         
+        if rank == 0:
+            print("✓ Data iterator created, starting batch processing...")
+        
         batch_idx = 0
         while tokens_processed < target_tokens:
+            # Show progress every 10 batches even before first log interval
+            if rank == 0 and batch_idx > 0 and batch_idx % 10 == 0:
+                current_time = time.time()
+                if current_time - last_progress_time >= 5.0:  # At least 5 seconds between progress updates
+                    elapsed = current_time - start_time
+                    tokens_per_sec = tokens_processed / elapsed if elapsed > 0 else 0
+                    progress_pct = (tokens_processed / target_tokens) * 100
+                    print(f"📊 Progress: {batch_idx} batches, {tokens_processed:,}/{target_tokens:,} tokens ({progress_pct:.1f}%), {tokens_per_sec:.1f} tok/s")
+                    last_progress_time = current_time
+            
+            if rank == 0 and batch_idx == 0:
+                batch_start_time = time.time()
+                print("⏱️  Processing first batch (this may take a moment)...")
+            
             try:
                 batch = next(dataloader_iter)
             except StopIteration:
                 # Recreate iterator if we reach the end
                 dataloader_iter = iter(train_dataloader)
                 batch = next(dataloader_iter)
+            
+            if rank == 0 and batch_idx == 0:
+                first_batch_time = time.time() - batch_start_time
+                print(f"✓ First batch loaded ({first_batch_time:.1f}s), beginning forward pass...")
             
             # === Context Length Ramping ===
             if context_schedule and rank == 0:
@@ -1201,9 +1253,12 @@ def main():
             input_ids = batch['input_ids'].to(device)
             batch_size_actual, seq_len = input_ids.shape
             
+            if rank == 0 and batch_idx == 1:  # After first batch is loaded
+                print(f"🧠 Starting forward pass (batch_size={batch_size_actual}, seq_len={seq_len})...")
+            
             with autocast(enabled=torch.cuda.is_available()):
                 # === Forward & CE Loss ===
-                loss, valid_tokens = train_step(model, batch, device)
+                loss, valid_tokens = train_step(model, batch, device, pad_token_id)
                 
                 # === Router Supervision ===
                 router_loss = compute_router_loss(model, input_ids, tokenizer, device)
@@ -1244,6 +1299,12 @@ def main():
                 scaler.step(optimizer)
                 scaler.update()
                 optimizer.zero_grad()
+                
+                # Show progress for first few steps
+                if rank == 0 and step <= 5:
+                    elapsed = time.time() - start_time
+                    tokens_per_sec = tokens_processed / elapsed if elapsed > 0 else 0
+                    print(f"🎯 Step {step} completed! Tokens: {tokens_processed:,}, Speed: {tokens_per_sec:.1f} tok/s")
                 
                 # === Logging ===
                 if step % log_interval == 0 and rank == 0:
